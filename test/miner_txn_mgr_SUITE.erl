@@ -49,7 +49,7 @@ init_per_testcase(_TestCase, Config0) ->
     NumConsensusMembers = ?config(num_consensus_members, Config),
     BlockTime =
         case _TestCase of
-            txn_dependent_test -> 2000;
+            txn_dependent_test -> 5000;
             _ -> ?config(block_time, Config)
         end,
 
@@ -295,7 +295,7 @@ txn_dependent_test(Config) ->
     Payee = hd(miner_ct_utils:shuffle(ConMiners)),
     PayeeAddr = miner_ct_utils:node2addr(Payee, AddrList),
     {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Miner, blockchain_swarm, keys, []),
-    IgnoredTxns = [blockchain_txn_poc_request_v1_pb],
+    IgnoredTxns = [blockchain_txn_poc_request_v1],
     StartNonce = miner_ct_utils:get_nonce(Miner, Addr),
 
     %% prep the txns, 1 - 4
@@ -322,28 +322,30 @@ txn_dependent_test(Config) ->
     %% Wait a few blocks, confirm txns remain in the cache
     ok = miner_ct_utils:wait_for_gte(height_exactly, Miners, Height + 3),
 
-    %% confirm all txns are still be in txn mgr cache
+    %% confirm all 3 submitted txns are still be in txn mgr cache
     true = miner_ct_utils:wait_until(
                                         fun()->
                                             maps:size(get_cached_txns_with_exclusions(Miner, IgnoredTxns)) == 3
-                                        end, 60, 100),
+                                        end, 60, 200),
 
     %% now submit the remaining txn which will have the missing nonce
     %% this should result in both this and the previous txns being accepted by the CG
     %% and cleared out of the txn mgr cache
     ok = ct_rpc:call(Miner, blockchain_worker, submit_txn, [SignedTxn1]),
 
-    %% Wait one more block
+    %% we wait one block and hope to see all txns cleared out of the txn mgr cache
+    %% this confirms all txns are being submitted in the span of a single block
+    %% NOTE: we had to bump block time up to 5secs for this test
+    %% in order to give the CG time to accept all txns
     ok = miner_ct_utils:wait_for_gte(height_exactly, Miners, Height + 4),
 
-    %% confirm all txns are are gone from the cache within the span of a single block
-    %% ie they are not carrying across blocks
+    %% confirm all txns are are gone from the cache
     true = miner_ct_utils:wait_until(
                                         fun()->
                                             maps:size(get_cached_txns_with_exclusions(Miner, IgnoredTxns)) == 0
-                                        end, 60, 100),
+                                        end, 60, 200),
 
-    ok = miner_ct_utils:wait_for_gte(height_exactly, Miners, Height + 5),
+    ok = miner_ct_utils:wait_for_gte(height, Miners, Height + 5),
 
     ExpectedNonce = StartNonce +4,
     true = nonce_updated_for_miner(Addr, ExpectedNonce, ConMiners),
